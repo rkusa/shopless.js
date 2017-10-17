@@ -119,13 +119,14 @@ export default class Shopless {
     }
   }
 
-  async order() {
+  async order(opts) {
     const cart = this.cart
     const res = await fetch(this.endpoint + "orders", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        paymentMethod: "paypal",
+        paymentMethod: opts.payment.method,
+        paymentMeta: opts.payment.meta,
         currency: this.currency,
         lineItems: cart.lineItems.map(item => {
           let url = item.url
@@ -147,8 +148,6 @@ export default class Shopless {
       }),
     })
     // TODO: error handling
-    const json = await res.json();
-    return json
   }
 }
 
@@ -158,6 +157,7 @@ function saveCart(cart) {
 
 class Address {
   constructor(data) {
+    this.recipient = data.recipient
     this.line1 = data.line1
     this.line2 = data.line2
     this.postalCode = data.postalCode
