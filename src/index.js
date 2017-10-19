@@ -1,8 +1,9 @@
 import Decimal from "decimal.js-light"
 
 const LOCAL_STORAGE_KEY = "shoplessCart"
+const ZERO = new Decimal(0)
 
-export default class Shopless {
+export class Cart {
   constructor(opts) {
     if (!opts || !opts.endpoint) {
       throw new TypeError("Endpoint must be defined")
@@ -15,27 +16,42 @@ export default class Shopless {
     this.currency = opts.currency || 'EUR'
     this.stackLineItems = opts.stackLineItems === false ? false : true
     this.cache = new Map()
-    this._cart = null
     this.settings = null
+
+    this.lineItems = []
+    this.invoiceAddress = this.shippingAddress = null
   }
 
-  get cart() {
-    if (this._cart) {
-      return this._cart
+  valueOf() {
+    return {
+      currency: this.currency.valueOf(),
+      lineItems: this.lineItems.valueOf(),
+      invoiceAddress: this.invoiceAddress ? this.invoiceAddress.valueOf() : null,
+      shippingAddress: this.shippingAddress ? this.shippingAddress.valueOf() : null,
     }
+  }
 
-    let cart = window.localStorage.getItem(LOCAL_STORAGE_KEY)
-    if (cart) {
-      cart = new Cart(JSON.parse(cart))
+  async restore() {
+    let data = window.localStorage.getItem(LOCAL_STORAGE_KEY)
+    if (data) {
+      data = JSON.parse(data)
+      if (data.currency !== this.currency) {
+        return
+      }
     } else {
-      cart = new Cart()
+      return
     }
 
-    this._cart = cart
-    return cart
+    this.settings = await fetchSettings()
+    this.lineItems = data.lineItems.map(data => {
+      return data instanceof LineItem ? data : new LineItem(data)
+    })
+    this.invoiceAddress = data && data.invoiceAddress && new Address(data.invoiceAddress)
+    this.shippingAddress = data && data.shippingAddress && new Address(data.shippingAddress)
+    this.updateShipping()
   }
 
-  async addToCart(url, qty, meta) {
+  async add(url, qty, meta) {
     if (!qty) {
       return this.cart
     }
@@ -88,11 +104,10 @@ export default class Shopless {
       meta: meta,
     })
 
-    const cart = this.cart
     let isNew = true
 
     if (this.stackLineItems) {
-      for (const lhs of cart.lineItems) {
+      for (const lhs of this.lineItems) {
         if (lhs.equals(lineItem)) {
           lhs.quantity = lhs.quantity.add(lineItem.quantity)
           isNew = false
@@ -102,25 +117,23 @@ export default class Shopless {
     }
 
     if (isNew) {
-      cart.lineItems.push(lineItem)
+      this.lineItems.push(lineItem)
     }
 
-    saveCart(cart)
-
-    return cart
+    saveCart(this)
+    this.updateShipping()
   }
 
-  removeFromCart(lineItem) {
-    const cart = this.cart
-    const ix = cart.lineItems.indexOf(lineItem)
+  remove(lineItem) {
+    const ix = this.lineItems.indexOf(lineItem)
     if (ix > -1) {
-      cart.lineItems.splice(ix, 1)
-      saveCart(cart)
+      this.lineItems.splice(ix, 1)
+      saveCart(this)
     }
+    this.updateShipping()
   }
 
   async order(opts) {
-    const cart = this.cart
     const res = await fetch(this.endpoint + "orders", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -128,7 +141,7 @@ export default class Shopless {
         paymentMethod: opts.payment.method,
         paymentMeta: opts.payment.meta,
         currency: this.currency,
-        lineItems: cart.lineItems.map(item => {
+        lineItems: this.lineItems.map(item => {
           let url = item.url
           if (url.substr(0, 4) !== "http") {
             url = location.origin + url
@@ -141,18 +154,98 @@ export default class Shopless {
             total: item.total,
           }
         }),
-        shippingAddress: cart.shippingAddress,
-        invoiceAddress: cart.invoiceAddress,
-        total: cart.total,
-        tax: cart.tax,
+        shippingAddress: this.shippingAddress,
+        invoiceAddress: this.invoiceAddress,
+        total: this.total,
+        tax: this.tax,
       }),
     })
     // TODO: error handling
   }
+
+  updateShipping() {
+    if (!this.settings) {
+      return
+    }
+
+    this.shippingRules = this.settings.shipping.filter(rule => {
+      // TODO: other rules
+      return rule.currency === this.currency
+    })
+  }
+
+  setInvoiceAddress(data) {
+    this.invoiceAddress = data ? new Address(data) : null
+    saveCart(this)
+  }
+
+  setShippingAddress(data) {
+    this.shippingAddress = data ? new Address(data) : null
+    saveCart(this)
+  }
+
+  get shipping() {
+    if (!this.shippingAddress) {
+      return new Decimal(0)
+    }
+
+    const rules = this.shippingRules.filter(rule => {
+      return rule.countries.indexOf(this.shippingAddress.country) > -1
+    })
+
+    if (rules.length > 0) {
+      return new Decimal(rules[0].price)
+    } else {
+      return new Decimal(0)
+    }
+  }
+
+  get tax() {
+    if (!this.shippingAddress) {
+      return ZERO
+    }
+
+    const subtotal = this.subtotal
+    if (subtotal.eq(0)) {
+      return ZERO
+    }
+
+    let parts = new Map()
+    let tax = this.lineItems
+      .map(lineItem => {
+        const taxrate = lineItem.countryTax(this.shippingAddress.country)
+        let part = parts.get(taxrate.rate) || new Decimal(0)
+        part = part.add(lineItem.total)
+        parts.set(taxrate.rate, part)
+        return taxrate.tax
+      })
+      .reduce((lhs, rhs) => lhs.add(rhs), new Decimal(0))
+
+
+    const shipping = this.shipping
+    if (shipping.gt(0)) {
+      for (var [rate, part] of parts) {
+        tax = tax.add(calcTax(part.div(subtotal).mul(shipping), rate))
+      }
+    }
+
+    return tax.toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+  }
+
+  get subtotal() {
+    return this.lineItems
+      .map(lineItem => lineItem.total)
+      .reduce((lhs, rhs) => lhs.add(rhs), new Decimal(0))
+      .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
+  }
+
+  get total() {
+    return this.subtotal.add(this.shipping)
+  }
 }
 
 function saveCart(cart) {
-  window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(cart))
+  window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(cart.valueOf()))
 }
 
 class Address {
@@ -163,44 +256,6 @@ class Address {
     this.postalCode = data.postalCode
     this.city = data.city
     this.country = data.country
-  }
-}
-
-class Cart {
-  constructor(data) {
-    this.lineItems = data ? data.lineItems.map(data => {
-      return data instanceof LineItem ? data : new LineItem(data)
-    }) : []
-    this.invoiceAddress = data && data.invoiceAddress && new Address(data.invoiceAddress)
-    this.shippingAddress = data && data.shippingAddress && new Address(data.shippingAddress)
-  }
-
-  setInvoiceAddress(data) {
-    this.invoiceAddress = new Address(data)
-    saveCart(this)
-  }
-
-  setShippingAddress(data) {
-    this.shippingAddress = new Address(data)
-    saveCart(this)
-  }
-
-  get tax() {
-    if (!this.shippingAddress) {
-      return 0
-    }
-
-    return this.lineItems
-      .map(lineItem => lineItem.countryTax(this.shippingAddress.country))
-      .reduce((lhs, rhs) => lhs.add(rhs), new Decimal(0))
-      .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
-  }
-
-  get total() {
-    return this.lineItems
-      .map(lineItem => lineItem.total)
-      .reduce((lhs, rhs) => lhs.add(rhs), new Decimal(0))
-      .toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
   }
 }
 
@@ -226,17 +281,17 @@ class LineItem {
       if (entry.countries.indexOf(isoCode) !== -1) {
         let taxrate = new Decimal(entry.taxrate)
         if (taxrate.gt(0)) {
-          taxrate = taxrate.div(100)
-          const taxPart = taxrate.div(taxrate.add(1))
-
-          return this.total.mul(taxPart)
+          return {
+            tax: calcTax(this.total, taxrate),
+            rate: taxrate
+          }
         }
 
         break
       }
     }
 
-    return 0
+    return  { tax: 0, rate: 0 }
   }
 
   get total() {
@@ -262,6 +317,17 @@ class LineItem {
     return this.url === rhs.url &&
            this.price.eq(rhs.price) &&
            this.name === rhs.name
+  }
+}
+
+function calcTax(brutto, taxrate) {
+  if (taxrate.gt(0)) {
+    taxrate = taxrate.div(100)
+    const taxPart = taxrate.div(taxrate.add(1))
+
+    return brutto.mul(taxPart)
+  } else {
+    return new Decimal(0)
   }
 }
 
