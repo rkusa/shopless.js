@@ -51,7 +51,7 @@ export class Cart {
     this.updateShipping()
   }
 
-  async add(url, qty, meta) {
+  async add(url, qty, meta, options) {
     if (!qty) {
       return this.cart
     }
@@ -95,6 +95,34 @@ export class Cart {
       }
     }
 
+    const lineOptions = options && Object.entries(options).map(([sku, value]) => {
+      const option = data.options.find(o => o.sku === sku)
+      if (!option) {
+        throw new Error(`Option with sku ${sku} does not exist`)
+      }
+
+
+      switch (option.type) {
+      case "number":
+        value = parseFloat(options[sku], 10)
+        if ((option.min !== undefined && value < option.min)
+          || (option.max !== undefined && value > option.max)
+          || (option.step !== undefined && value % option.step !== 0))
+        {
+          throw new Error(`Unsupported value ${value} for option ${sku}`)
+        }
+        return { sku, value, name: option.name }
+      case "boolean":
+        if (value === true) {
+          return { sku, value, name: option.name }
+        } else {
+          return null
+        }
+      default:
+        throw new Error("Unsupported option type: " + option.type)
+      }
+    }).filter(o => o)
+
     const lineItem = new LineItem({
       url: url,
       quantity: qty,
@@ -102,6 +130,7 @@ export class Cart {
       taxrates: taxrates,
       name: data.name,
       meta: meta,
+      options: lineOptions,
     })
 
     let isNew = true
@@ -156,8 +185,9 @@ export class Cart {
         }),
         shippingAddress: this.shippingAddress,
         invoiceAddress: this.invoiceAddress,
-        total: this.total,
+        shipping: this.shipping,
         tax: this.tax,
+        total: this.total,
       }),
     })
     // TODO: error handling
@@ -274,6 +304,7 @@ class LineItem {
     this.taxrates = data.taxrates
     this.name = data.name
     this.meta = data.meta
+    this.options = data.options
   }
 
   countryTax(isoCode) {
@@ -307,6 +338,7 @@ class LineItem {
       taxrates: this.taxrates.valueOf(),
       name: this.name.valueOf(),
       meta: this.meta.valueOf(),
+      options: this.options.valueOf(),
     }
   }
 
@@ -316,7 +348,8 @@ class LineItem {
     // compared as well
     return this.url === rhs.url &&
            this.price.eq(rhs.price) &&
-           this.name === rhs.name
+           this.name === rhs.name &&
+           JSON.stringify(this.options) === JSON.stringify(rhs.options)
   }
 }
 
@@ -355,7 +388,7 @@ async function fetchJSONLD(url) {
   if(contentType && contentType.includes("text/html")) {
     const fragment = document.createElement("div")
     fragment.innerHTML = await res.text()
-    console.log(fragment)
+    // console.log(fragment)
     const els = fragment.querySelectorAll("script[type='application/ld+json']")
     for (let i = 0, len = els.length; i < len; ++i) {
       const el = els[i]
