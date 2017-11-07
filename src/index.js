@@ -100,9 +100,9 @@ export class Cart {
       if (!option) {
         throw new Error(`Option with sku ${sku} does not exist`)
       }
+      const prices = (Array.isArray(option.price) ? option.price : [option.price])
 
-
-      switch (option.type) {
+      switch (option.kind) {
       case "number":
         value = parseFloat(options[sku], 10)
         if ((option.min !== undefined && value < option.min)
@@ -111,15 +111,30 @@ export class Cart {
         {
           throw new Error(`Unsupported value ${value} for option ${sku}`)
         }
-        return { sku, value, name: option.name }
+        const price = prices.find(p => {
+          return p.currency === offer.priceCurrency &&
+            (p.from === undefined || value >= p.from) &&
+            (p.to === undefined || value <= p.to) &&
+            (p.step === undefined || value % p.step === 0)
+        })
+        if (!price) {
+          throw new Error(`No eligible price find for option ${sku} with value ${value}`)
+        }
+        return { sku, kind: option.kind, value, price: new Decimal(price.price), name: option.name }
       case "boolean":
         if (value === true) {
-          return { sku, value, name: option.name }
+          const price = prices.find(p => {
+            return p.currency === offer.priceCurrency && p.value === value
+          })
+          if (!price) {
+            throw new Error(`No eligible price find for option ${sku} with value ${value}`)
+          }
+          return { sku, kind: option.kind, value, price: new Decimal(price.price), name: option.name }
         } else {
           return null
         }
       default:
-        throw new Error("Unsupported option type: " + option.type)
+        throw new Error("Unsupported option kind: " + option.kind)
       }
     }).filter(o => o)
 
@@ -181,6 +196,7 @@ export class Cart {
             quantity: item.quantity,
             price: item.price,
             total: item.total,
+            options: item.options,
           }
         }),
         shippingAddress: this.shippingAddress,
@@ -304,7 +320,10 @@ class LineItem {
     this.taxrates = data.taxrates
     this.name = data.name
     this.meta = data.meta
-    this.options = data.options
+    this.options = data.options.map(o => {
+      o.price = new Decimal(o.price)
+      return o
+    })
   }
 
   countryTax(isoCode) {
@@ -326,7 +345,11 @@ class LineItem {
   }
 
   get total() {
-    const total = this.quantity.mul(this.price)
+    let total = this.options.map(o => o.price).reduce(
+      (lhs, rhs) => lhs.add(rhs),
+      this.price
+    )
+    total = this.quantity.mul(total)
     return total.toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
   }
 
