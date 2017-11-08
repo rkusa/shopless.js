@@ -100,42 +100,32 @@ export class Cart {
       if (!option) {
         throw new Error(`Option with sku ${sku} does not exist`)
       }
-      const prices = (Array.isArray(option.price) ? option.price : [option.price])
 
-      switch (option.kind) {
-      case "number":
-        value = parseFloat(options[sku], 10)
-        if ((option.min !== undefined && value < option.min)
-          || (option.max !== undefined && value > option.max)
-          || (option.step !== undefined && value % option.step !== 0))
-        {
-          throw new Error(`Unsupported value ${value} for option ${sku}`)
+      const constraint = option.constraints.find(c => {
+        switch (c.kind) {
+        case "number":
+          value = parseFloat(value, 10)
+          return offer.priceCurrency === c.currency
+            && ((value === undefined || value === c.value) || (
+                (c.min === undefined || value >= c.min)
+                && (c.max === undefined || value <= c.max)
+                && (c.step === undefined || value % c.step === 0)
+              ))
+          break
+        case "boolean":
+          return offer.priceCurrency === c.currency
+            && (!c.value || value === c.value)
+          break
+        default:
+          return false
         }
-        const price = prices.find(p => {
-          return p.currency === offer.priceCurrency &&
-            (p.from === undefined || value >= p.from) &&
-            (p.to === undefined || value <= p.to) &&
-            (p.step === undefined || value % p.step === 0)
-        })
-        if (!price) {
-          throw new Error(`No eligible price find for option ${sku} with value ${value}`)
-        }
-        return { sku, kind: option.kind, value, price: new Decimal(price.price), name: option.name }
-      case "boolean":
-        if (value === true) {
-          const price = prices.find(p => {
-            return p.currency === offer.priceCurrency && p.value === value
-          })
-          if (!price) {
-            throw new Error(`No eligible price find for option ${sku} with value ${value}`)
-          }
-          return { sku, kind: option.kind, value, price: new Decimal(price.price), name: option.name }
-        } else {
-          return null
-        }
-      default:
-        throw new Error("Unsupported option kind: " + option.kind)
+      })
+
+      if (!constraint) {
+        throw new Error(`Unsupported value ${value} for option ${sku}`)
       }
+
+      return { sku, kind: option.kind, value, price: new Decimal(constraint.price), name: option.name }
     }).filter(o => o)
 
     const lineItem = new LineItem({
