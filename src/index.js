@@ -19,7 +19,7 @@ export class Cart {
     this.settings = null
 
     this.lineItems = []
-    this.invoiceAddress = this.shippingAddress = null
+    this.invoiceAddress = this.shippingAddress = this.email = null
   }
 
   valueOf() {
@@ -28,6 +28,7 @@ export class Cart {
       lineItems: this.lineItems.valueOf(),
       invoiceAddress: this.invoiceAddress ? this.invoiceAddress.valueOf() : null,
       shippingAddress: this.shippingAddress ? this.shippingAddress.valueOf() : null,
+      email: this.email ? this.email.valueOf() : null,
     }
   }
 
@@ -48,6 +49,7 @@ export class Cart {
     })
     this.invoiceAddress = data && data.invoiceAddress && new Address(data.invoiceAddress)
     this.shippingAddress = data && data.shippingAddress && new Address(data.shippingAddress)
+    this.email = data.email
     this.updateShipping()
   }
 
@@ -173,6 +175,7 @@ export class Cart {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         paymentMethod: opts.payment.method,
+        paymentId: opts.payment.id,
         paymentMeta: opts.payment.meta,
         currency: this.currency,
         lineItems: this.lineItems.map(item => {
@@ -189,6 +192,7 @@ export class Cart {
             options: item.options,
           }
         }),
+        email: this.email,
         shippingAddress: this.shippingAddress,
         invoiceAddress: this.invoiceAddress,
         shipping: this.shipping,
@@ -221,7 +225,7 @@ export class Cart {
   }
 
   get shipping() {
-    if (!this.shippingAddress) {
+    if (!this.shippingAddress || !this.shippingRules) {
       return new Decimal(0)
     }
 
