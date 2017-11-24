@@ -170,6 +170,7 @@ export class Cart {
   }
 
   async order(opts) {
+    const shippingMethod = this.shippingMethod(this.shippingAddress.country)
     const res = await fetch(this.endpoint + "orders", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -195,6 +196,7 @@ export class Cart {
         email: this.email,
         shippingAddress: this.shippingAddress,
         invoiceAddress: this.invoiceAddress,
+        shippingMethod: shippingMethod ? shippingMethod.name : null,
         shipping: this.shipping,
         tax: this.tax,
         total: this.total,
@@ -224,17 +226,26 @@ export class Cart {
     saveCart(this)
   }
 
+  shippingMethod(country) {
+    if (!this.settings) {
+      throw new Error("Settings not loaded")
+    }
+
+    return this.settings.shipping.filter(rule => {
+      // TODO: other rules
+      return rule.currency === this.currency
+        && rule.countries.indexOf(country) > -1
+    })[0]
+  }
+
   get shipping() {
     if (!this.shippingAddress || !this.shippingRules) {
       return new Decimal(0)
     }
 
-    const rules = this.shippingRules.filter(rule => {
-      return rule.countries.indexOf(this.shippingAddress.country) > -1
-    })
-
-    if (rules.length > 0) {
-      return new Decimal(rules[0].price)
+    const rule = this.shippingMethod(this.shippingAddress.country)
+    if (rule) {
+      return new Decimal(rule.price)
     } else {
       return new Decimal(0)
     }
