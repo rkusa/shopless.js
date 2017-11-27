@@ -200,6 +200,7 @@ export class Cart {
         shipping: this.shipping,
         tax: this.tax,
         total: this.total,
+        locale: opts.locale || null,
       }),
     })
     // TODO: error handling
