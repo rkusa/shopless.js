@@ -206,6 +206,11 @@ export class Cart {
     // TODO: error handling
   }
 
+  reset() {
+    this.lineItems = []
+    this.invoiceAddress = this.shippingAddress = this.email = null
+  }
+
   updateShipping() {
     if (!this.settings) {
       return
