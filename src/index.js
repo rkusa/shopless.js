@@ -240,6 +240,14 @@ export class Cart {
     }
   }
 
+  countries() {
+    if (!this.settings) {
+      return []
+    } else {
+      return this.settings.allowedCountries
+    }
+  }
+
   shippingMethod(country) {
     if (!this.settings) {
       throw new Error("Settings not loaded")
