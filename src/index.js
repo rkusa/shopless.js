@@ -231,6 +231,15 @@ export class Cart {
     saveCart(this)
   }
 
+  async countryProvinces(country) {
+    const res = await fetch(`/.well-known/shopless/provinces/${country.toLowerCase()}.json`)
+    if (res.status !== 200) {
+      return []
+    } else {
+      return await res.json()
+    }
+  }
+
   shippingMethod(country) {
     if (!this.settings) {
       throw new Error("Settings not loaded")
@@ -311,6 +320,7 @@ class Address {
     this.line2 = data.line2
     this.postalCode = data.postalCode
     this.city = data.city
+    this.province = data.province || null
     this.country = data.country
   }
 }
