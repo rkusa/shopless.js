@@ -226,11 +226,13 @@ export class Cart {
 
   setInvoiceAddress(data) {
     this.invoiceAddress = data ? new Address(data) : null
+    this.invoiceAddress.countryName = this.countries()[this.invoiceAddress.country]
     saveCart(this)
   }
 
   setShippingAddress(data) {
     this.shippingAddress = data ? new Address(data) : null
+    this.shippingAddress.countryName = this.countries()[this.shippingAddress.country]
     saveCart(this)
   }
 
@@ -245,7 +247,7 @@ export class Cart {
 
   countries() {
     if (!this.settings) {
-      return []
+      return {}
     } else {
       return this.settings.allowedCountries
     }
@@ -333,6 +335,7 @@ class Address {
     this.city = data.city
     this.province = data.province || null
     this.country = data.country
+    this.countryName = data.countryName
   }
 }
 
