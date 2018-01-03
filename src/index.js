@@ -210,6 +210,7 @@ export class Cart {
   reset() {
     this.lineItems = []
     this.invoiceAddress = this.shippingAddress = this.email = null
+    saveCart(this)
   }
 
   updateShipping() {
