@@ -330,7 +330,7 @@ class Address {
   constructor(data) {
     this.recipient = data.recipient
     this.line1 = data.line1
-    this.line2 = data.line2
+    this.line2 = data.line2 || ''
     this.postalCode = data.postalCode
     this.city = data.city
     this.province = data.province || null
