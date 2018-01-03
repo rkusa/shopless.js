@@ -202,7 +202,9 @@ export class Cart {
         total: this.total,
       }),
     })
-    // TODO: error handling
+    if (res.status !== 201) {
+      throw new Error(await res.text())
+    }
   }
 
   reset() {
