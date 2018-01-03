@@ -405,7 +405,7 @@ class LineItem {
 }
 
 function calcTax(brutto, taxrate) {
-  if (taxrate.gt(0)) {
+  if (taxrate && taxrate.gt(0)) {
     taxrate = taxrate.div(100)
     const taxPart = taxrate.div(taxrate.add(1))
 
