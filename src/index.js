@@ -263,6 +263,11 @@ export class Cart {
     saveCart(this)
   }
 
+  setEmail(email) {
+    this.email = email
+    saveCart(this)
+  }
+
   async countryProvinces(country) {
     const res = await fetch(
       `/.well-known/shopless/provinces/${country.toLowerCase()}.json`
