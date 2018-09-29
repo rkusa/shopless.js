@@ -113,11 +113,9 @@ export class Cart {
                 && (c.max === undefined || value <= c.max)
                 && (c.step === undefined || value % c.step === 0)
               ))
-          break
         case "boolean":
           return offer.priceCurrency === c.currency
             && (!c.value || value === c.value)
-          break
         default:
           return false
         }
@@ -182,7 +180,7 @@ export class Cart {
         lineItems: this.lineItems.map(item => {
           let url = item.url
           if (url.substr(0, 4) !== "http") {
-            url = location.origin + url
+            url = window.location.origin + url
           }
           return {
             url: url,
@@ -433,20 +431,29 @@ async function fetchProductData(url) {
 }
 
 async function fetchJSONLD(url) {
-  const res = await fetch(url, {
-    headers: { Accept: "text/html, application/ld+json" }
-  })
+  let doc
+  if (window.location.pathname === url) {
+    doc = document.body
+  } else {
+    const res = await fetch(url, {
+      headers: { Accept: "text/html, application/ld+json" }
+    })
 
-  if (res.status !== 200) {
-    throw new Error("Failed to retrieve product with URL: " + url)
+    if (res.status !== 200) {
+      throw new Error("Failed to retrieve product with URL: " + url)
+    }
+
+    const contentType = res.headers.get("content-type")
+    if(contentType && contentType.includes("text/html")) {
+      doc = document.createElement("div")
+      doc.innerHTML = await res.text()
+    } else if (contentType && contentType.includes("application/ld+json")) {
+      return await res.json()
+    }
   }
 
-  const contentType = res.headers.get("content-type")
-  if(contentType && contentType.includes("text/html")) {
-    const fragment = document.createElement("div")
-    fragment.innerHTML = await res.text()
-    // console.log(fragment)
-    const els = fragment.querySelectorAll("script[type='application/ld+json']")
+  if (doc) {
+    const els = doc.querySelectorAll("script[type='application/ld+json']")
     for (let i = 0, len = els.length; i < len; ++i) {
       const el = els[i]
       let json
@@ -462,8 +469,6 @@ async function fetchJSONLD(url) {
           ${json["@context"]}/${json["@type"]}`)
       }
     }
-  } else if (contentType && contentType.includes("application/ld+json")) {
-    return await res.json()
   }
 
   return null
@@ -480,7 +485,7 @@ async function fetchSettings() {
 
   const contentType = res.headers.get("content-type")
   if(!contentType || !contentType.includes("application/json")) {
-    throw new Error("Failed to retreive shopless settings, expected JSON, received content-type: ", content-type)
+    throw new Error("Failed to retreive shopless settings, expected JSON, received content-type: ", contentType)
   }
 
   return await res.json()
