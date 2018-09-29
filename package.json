@@ -9,6 +9,6 @@
   "author": "Markus Ast <m@rkusa.st>",
   "license": "MIT",
   "dependencies": {
-    "decimal.js-light": "^2.2.5"
+    "decimal.js-light": "^2.4.1"
   }
 }
