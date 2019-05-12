@@ -117,6 +117,13 @@ export class Cart {
             throw new Error(`Option with sku ${sku} does not exist`)
           }
 
+          // check incompatible constraints
+          for (const c of option.constraints) {
+            if (c.kind === 'incompatible' && c.option in options) {
+              throw new Error(`Incompatible options ${sku} and ${c.option}`)
+            }
+          }
+
           const constraint = option.constraints.find(c => {
             switch (c.kind) {
               case 'number':
@@ -143,11 +150,19 @@ export class Cart {
             throw new Error(`Unsupported value ${value} for option ${sku}`)
           }
 
+          // check for price adjustments
+          let price = constraint.price
+          for (const c of option.constraints) {
+            if (c.kind === 'adjustment' && c.currency === offer.priceCurrency && c.option in options && options[c.option] !== false && value !== false) {
+              price += c.price
+            }
+          }
+
           return {
             sku,
             kind: option.kind,
             value,
-            price: new Decimal(constraint.price),
+            price: new Decimal(price),
             name: option.name
           }
         })
