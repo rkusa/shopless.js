@@ -13,5 +13,5 @@ action "Install Dependencies" {
 action "Typecheck" {
   uses = "actions/npm@v2.0.0"
   needs = ["Install Dependencies"]
-  args = "type-check"
+  args = "run type-check"
 }
