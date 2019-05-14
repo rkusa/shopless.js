@@ -3,8 +3,62 @@ import Decimal from 'decimal.js-light'
 const LOCAL_STORAGE_KEY = 'shoplessCart'
 const ZERO = new Decimal(0)
 
+interface CartOpts {
+  endpoint: string
+  currency?: string
+  stackLineItems?: boolean
+}
+
+interface CartValue {
+  currency: string
+  lineItems: LineItemValue[]
+  invoiceAddress: AddressValue | null
+  shippingAddress: AddressValue | null
+  email: string | null
+}
+
+export interface Taxrate {
+  taxrate: number
+  countries: string[]
+  productType?: string
+}
+
+export interface ShippingMethod {
+  price: number
+  currency: string
+  name: string
+  countries: string[]
+}
+
+export interface Settings {
+  allowedCountries: { [k: string]: string }
+  taxrates: Taxrate[]
+  shipping: ShippingMethod[]
+}
+
+export interface Payment<Meta> {
+  method: string
+  id: string
+  meta: Meta | null
+}
+
+interface OrderOpts<Meta> {
+  payment: Payment<Meta>
+}
+
 export class Cart {
-  constructor(opts) {
+  readonly endpoint: string
+  readonly currency: string
+  private readonly stackLineItems: boolean
+  private readonly cache: Map<string, JsonLd | null>
+  settings: Settings | null
+  lineItems: LineItem[]
+  email?: string | null
+  invoiceAddress?: Address | null
+  shippingAddress?: Address | null
+  shippingRules?: ShippingMethod[]
+
+  constructor(opts: CartOpts) {
     if (!opts || !opts.endpoint) {
       throw new TypeError('Endpoint must be defined')
     }
@@ -19,63 +73,56 @@ export class Cart {
     this.settings = null
 
     this.lineItems = []
-    this.invoiceAddress = this.shippingAddress = this.email = null
   }
 
-  valueOf() {
+  valueOf(): CartValue {
     return {
       currency: this.currency.valueOf(),
-      lineItems: this.lineItems.valueOf(),
-      invoiceAddress: this.invoiceAddress
-        ? this.invoiceAddress.valueOf()
-        : null,
+      lineItems: this.lineItems.valueOf() as LineItemValue[],
+      invoiceAddress: this.invoiceAddress ? (this.invoiceAddress.valueOf() as AddressValue) : null,
       shippingAddress: this.shippingAddress
-        ? this.shippingAddress.valueOf()
+        ? (this.shippingAddress.valueOf() as AddressValue)
         : null,
-      email: this.email ? this.email.valueOf() : null
+      email: this.email ? this.email.valueOf() : null,
     }
   }
 
   async restore() {
-    let data = window.localStorage.getItem(LOCAL_STORAGE_KEY)
-    if (data) {
-      data = JSON.parse(data)
+    const json = window.localStorage.getItem(LOCAL_STORAGE_KEY)
+    if (json) {
+      const data: CartValue = JSON.parse(json)
       if (data.currency !== this.currency) {
         return
       }
+
+      this.settings = await fetchSettings()
+      this.lineItems = data.lineItems.map(data => {
+        return data instanceof LineItem ? data : new LineItem(data)
+      })
+      this.invoiceAddress = data && data.invoiceAddress && new Address(data.invoiceAddress)
+      this.shippingAddress = data && data.shippingAddress && new Address(data.shippingAddress)
+      this.email = data.email
+      this.updateShipping()
     } else {
       return
     }
-
-    this.settings = await fetchSettings()
-    this.lineItems = data.lineItems.map(data => {
-      return data instanceof LineItem ? data : new LineItem(data)
-    })
-    this.invoiceAddress =
-      data && data.invoiceAddress && new Address(data.invoiceAddress)
-    this.shippingAddress =
-      data && data.shippingAddress && new Address(data.shippingAddress)
-    this.email = data.email
-    this.updateShipping()
   }
 
-  async add(url, qty, meta, options) {
+  async add(url: string, qty: number, meta: any, options: { [k: string]: number | boolean }) {
     if (!qty) {
-      return this.cart
+      return
     }
 
     if (!this.settings) {
       this.settings = await fetchSettings()
     }
 
-    const data = await fetchProductData.call(this, url)
-    if (data === null) {
-      throw new Error(
-        "Add to cart failed - product data could't be extracted from: " + url
-      )
+    const data = await this.fetchProductData(url)
+    if (!data) {
+      throw new Error("Add to cart failed - product data couldn't be extracted from: " + url)
     }
 
-    let offer = null
+    let offer: JsonLdOffer | null = null
     if (data.offers) {
       if (Array.isArray(data.offers)) {
         offer = data.offers.filter(o => o.priceCurrency === this.currency)[0]
@@ -85,15 +132,12 @@ export class Cart {
     }
 
     if (!offer) {
-      throw new Error(
-        'Product data does not contain an offer (price), product data is: ' +
-          data
-      )
+      throw new Error('Product data does not contain an offer (price), product data is: ' + data)
     }
 
     let taxrates = []
     if (data.additionalType) {
-      for (const setting of this.settings.taxrates) {
+      for (const setting of this.settings!.taxrates) {
         if (data.additionalType === setting.productType) {
           taxrates.push(setting)
         }
@@ -101,7 +145,7 @@ export class Cart {
     }
 
     if (taxrates.length === 0) {
-      for (const setting of this.settings.taxrates) {
+      for (const setting of this.settings!.taxrates) {
         if (!setting.productType) {
           taxrates.push(setting)
         }
@@ -127,24 +171,20 @@ export class Cart {
           const constraint = option.constraints.find(c => {
             switch (c.kind) {
               case 'number':
-                value = parseFloat(value, 10)
                 return (
-                  offer.priceCurrency === c.currency &&
+                  offer!.priceCurrency === c.currency &&
                   (value === undefined ||
                     value === c.value ||
                     ((c.min === undefined || value >= c.min) &&
                       (c.max === undefined || value <= c.max) &&
-                      (c.step === undefined || value % c.step === 0)))
+                      (c.step === undefined || (value as number) % c.step === 0)))
                 )
               case 'boolean':
-                return (
-                  offer.priceCurrency === c.currency &&
-                  (!c.value || value === c.value)
-                )
+                return offer!.priceCurrency === c.currency && (!c.value || value === c.value)
               default:
                 return false
             }
-          })
+          }) as NumberConstraint | BooleanConstraint | undefined
 
           if (!constraint) {
             throw new Error(`Unsupported value ${value} for option ${sku}`)
@@ -153,29 +193,34 @@ export class Cart {
           // check for price adjustments
           let price = constraint.price
           for (const c of option.constraints) {
-            if (c.kind === 'adjustment' && c.currency === offer.priceCurrency && c.option in options && options[c.option] !== false && value !== false) {
+            if (
+              c.kind === 'adjustment' &&
+              c.currency === offer!.priceCurrency &&
+              c.option in options &&
+              options[c.option] !== false &&
+              value !== false
+            ) {
               price += c.price
             }
           }
 
           return {
             sku,
-            kind: option.kind,
             value,
             price: new Decimal(price),
-            name: option.name
+            name: option.name,
           }
         })
         .filter(o => o)
 
     const lineItem = new LineItem({
       url: url,
-      quantity: qty,
+      quantity: new Decimal(qty),
       price: offer.price,
       taxrates: taxrates,
       name: data.name,
       meta: meta,
-      options: lineOptions
+      options: lineOptions,
     })
 
     let isNew = true
@@ -198,7 +243,7 @@ export class Cart {
     this.updateShipping()
   }
 
-  remove(lineItem) {
+  remove(lineItem: LineItem) {
     const ix = this.lineItems.indexOf(lineItem)
     if (ix > -1) {
       this.lineItems.splice(ix, 1)
@@ -207,7 +252,11 @@ export class Cart {
     this.updateShipping()
   }
 
-  async order(opts) {
+  async order<Meta>(opts: OrderOpts<Meta>) {
+    if (!this.shippingAddress) {
+      throw new Error('Must set a shipping address before creating an order')
+    }
+
     const shippingMethod = this.shippingMethod(this.shippingAddress.country)
     const res = await fetch(this.endpoint + 'orders', {
       method: 'POST',
@@ -228,7 +277,7 @@ export class Cart {
             quantity: item.quantity,
             price: item.price,
             total: item.total,
-            options: item.options
+            options: item.options,
           }
         }),
         email: this.email,
@@ -237,8 +286,8 @@ export class Cart {
         shippingMethod: shippingMethod ? shippingMethod.name : null,
         shipping: this.shipping,
         tax: this.tax,
-        total: this.total
-      })
+        total: this.total,
+      }),
     })
     if (res.status !== 201) {
       throw new Error(await res.text())
@@ -262,31 +311,29 @@ export class Cart {
     })
   }
 
-  setInvoiceAddress(data) {
+  setInvoiceAddress(data: AddressValue) {
     this.invoiceAddress = data ? new Address(data) : null
-    this.invoiceAddress.countryName = this.countries()[
-      this.invoiceAddress.country
-    ]
+    if (this.invoiceAddress) {
+      this.invoiceAddress.countryName = this.countries()[this.invoiceAddress.country]
+    }
     saveCart(this)
   }
 
-  setShippingAddress(data) {
+  setShippingAddress(data: AddressValue) {
     this.shippingAddress = data ? new Address(data) : null
-    this.shippingAddress.countryName = this.countries()[
-      this.shippingAddress.country
-    ]
+    if (this.shippingAddress) {
+      this.shippingAddress.countryName = this.countries()[this.shippingAddress.country]
+    }
     saveCart(this)
   }
 
-  setEmail(email) {
+  setEmail(email: string) {
     this.email = email
     saveCart(this)
   }
 
-  async countryProvinces(country) {
-    const res = await fetch(
-      `/.well-known/shopless/provinces/${country.toLowerCase()}.json`
-    )
+  async countryProvinces(country: string) {
+    const res = await fetch(`/.well-known/shopless/provinces/${country.toLowerCase()}.json`)
     if (res.status !== 200) {
       return []
     } else {
@@ -302,16 +349,14 @@ export class Cart {
     }
   }
 
-  shippingMethod(country) {
+  shippingMethod(country: string) {
     if (!this.settings) {
       throw new Error('Settings not loaded')
     }
 
     return this.settings.shipping.filter(rule => {
       // TODO: other rules
-      return (
-        rule.currency === this.currency && rule.countries.indexOf(country) > -1
-      )
+      return rule.currency === this.currency && rule.countries.indexOf(country) > -1
     })[0]
   }
 
@@ -339,8 +384,12 @@ export class Cart {
     }
 
     let parts = new Map()
-    let tax = this.lineItems
+    let tax: Decimal = this.lineItems
       .map(lineItem => {
+        if (!this.shippingAddress) {
+          return new Decimal(0)
+        }
+
         const taxrate = lineItem.countryTax(this.shippingAddress.country)
         let part = parts.get(taxrate.rate) || new Decimal(0)
         part = part.add(lineItem.total)
@@ -369,56 +418,113 @@ export class Cart {
   get total() {
     return this.subtotal.add(this.shipping)
   }
+
+  private async fetchProductData(url: string) {
+    if (this.cache.has(url)) {
+      return this.cache.get(url)
+    }
+
+    const data = await fetchJSONLD(url)
+    this.cache.set(url, data)
+
+    return data
+  }
 }
 
-function saveCart(cart) {
+function saveCart(cart: Cart) {
   window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(cart.valueOf()))
 }
 
-class Address {
-  constructor(data) {
+interface AddressValue {
+  readonly recipient: string
+  readonly line1: string
+  readonly line2: string
+  readonly postalCode: string
+  readonly city: string
+  readonly province?: string
+  readonly country: string
+  readonly countryName: string
+}
+
+export class Address implements AddressValue {
+  public recipient: string
+  public line1: string
+  public line2: string
+  public postalCode: string
+  public city: string
+  public province?: string
+  public country: string
+  public countryName: string
+
+  constructor(data: AddressValue) {
     this.recipient = data.recipient
     this.line1 = data.line1
     this.line2 = data.line2 || ''
     this.postalCode = data.postalCode
     this.city = data.city
-    this.province = data.province || null
+    this.province = data.province
     this.country = data.country
     this.countryName = data.countryName
   }
 }
 
-class LineItem {
-  constructor(data) {
-    if (data instanceof LineItem) {
-      return data
-    }
+interface OptionValue {
+  sku: string
+  name: string
+  price: string | Decimal
+  value: number | boolean
+}
 
+interface Option {
+  sku: string
+  name: string
+  price: Decimal
+  value: number | boolean
+}
+
+interface LineItemValue {
+  url: string
+  quantity: string | Decimal
+  price: string | Decimal | number
+  taxrates: Taxrate[]
+  name: string
+  meta: any
+  options: OptionValue[]
+}
+
+export class LineItem {
+  public url: string
+  public quantity: Decimal
+  public price: Decimal
+  public taxrates: Taxrate[]
+  public name: string
+  public meta: any
+  public options: Option[]
+
+  constructor(data: LineItemValue) {
     this.url = data.url
     this.quantity = new Decimal(data.quantity)
     this.price = new Decimal(data.price)
     if (!this.price.gt(0)) {
-      throw new TypeError(
-        'Price cannot be negative (use a negative quantity instead)'
-      )
+      throw new TypeError('Price cannot be negative (use a negative quantity instead)')
     }
     this.taxrates = data.taxrates
     this.name = data.name
     this.meta = data.meta
-    this.options = data.options.map(o => {
-      o.price = new Decimal(o.price)
-      return o
-    })
+    this.options = data.options.map(o => ({
+      ...o,
+      price: new Decimal(o.price),
+    }))
   }
 
-  countryTax(isoCode) {
+  countryTax(isoCode: string) {
     for (const entry of this.taxrates) {
       if (entry.countries.indexOf(isoCode) !== -1) {
         let taxrate = new Decimal(entry.taxrate)
         if (taxrate.gt(0)) {
           return {
             tax: calcTax(this.total, taxrate),
-            rate: taxrate
+            rate: taxrate,
           }
         }
 
@@ -426,30 +532,28 @@ class LineItem {
       }
     }
 
-    return { tax: 0, rate: 0 }
+    return { tax: new Decimal(0), rate: new Decimal(0) }
   }
 
   get total() {
-    let total = this.options
-      .map(o => o.price)
-      .reduce((lhs, rhs) => lhs.add(rhs), this.price)
+    let total = this.options.map(o => o.price).reduce((lhs, rhs) => lhs.add(rhs), this.price)
     total = this.quantity.mul(total)
     return total.toDecimalPlaces(2, Decimal.ROUND_HALF_UP)
   }
 
-  valueOf() {
+  valueOf(): LineItemValue {
     return {
       url: this.url.valueOf(),
       quantity: this.quantity.valueOf(),
       price: this.price.valueOf(),
-      taxrates: this.taxrates.valueOf(),
+      taxrates: this.taxrates.valueOf() as Taxrate[],
       name: this.name.valueOf(),
       meta: this.meta.valueOf(),
-      options: this.options.valueOf()
+      options: this.options.valueOf() as OptionValue[],
     }
   }
 
-  equals(data) {
+  equals(data: LineItemValue) {
     let rhs = new LineItem(data)
     // NOTICE: meta is not compared, experience should show whether it should be
     // compared as well
@@ -462,7 +566,7 @@ class LineItem {
   }
 }
 
-function calcTax(brutto, taxrate) {
+function calcTax(brutto: Decimal, taxrate: Decimal) {
   if (taxrate && taxrate.gt(0)) {
     taxrate = taxrate.div(100)
     const taxPart = taxrate.div(taxrate.add(1))
@@ -473,24 +577,80 @@ function calcTax(brutto, taxrate) {
   }
 }
 
-async function fetchProductData(url) {
-  if (this.cache.has(url)) {
-    return this.cache.get(url)
-  }
-
-  const data = await fetchJSONLD(url)
-  this.cache.set(url, data)
-
-  return data
+export interface JsonLd {
+  '@context': 'http://schema.org'
+  '@type': 'Product'
+  image: string
+  url: string
+  name: string
+  sku: string
+  offers: JsonLdOffer | JsonLdOffer[]
+  options: JsonLdOption[]
+  additionalType?: string
 }
 
-async function fetchJSONLD(url) {
+export interface JsonLdOffer {
+  '@type': 'Offer'
+  priceCurrency: string
+  price: number
+  itemCondition: 'http://schema.org/NewCondition'
+  availability: 'http://schema.org/InStock'
+  additionalType?: string
+}
+
+export interface JsonLdOption {
+  '@type': 'Option'
+  sku: string
+  name: string
+  constraints: Constraint[]
+}
+
+export interface NumberConstraint {
+  '@type': 'Constraint'
+  kind: 'number'
+  value?: number
+  min?: number
+  max?: number
+  step?: number
+  price: number
+  currency: string
+}
+
+export interface BooleanConstraint {
+  '@type': 'Constraint'
+  kind: 'boolean'
+  value: boolean
+  price: number
+  currency: string
+}
+
+export interface IncompatibleConstraint {
+  '@type': 'Constraint'
+  kind: 'incompatible'
+  option: string
+}
+
+export interface AdjustmentConstraint {
+  '@type': 'Constraint'
+  kind: 'adjustment'
+  option: string
+  price: number
+  currency: string
+}
+
+export type Constraint =
+  | NumberConstraint
+  | BooleanConstraint
+  | IncompatibleConstraint
+  | AdjustmentConstraint
+
+async function fetchJSONLD(url: string): Promise<JsonLd | null> {
   let doc
   if (window.location.pathname === url) {
     doc = document.body
   } else {
     const res = await fetch(url, {
-      headers: { Accept: 'text/html, application/ld+json' }
+      headers: { Accept: 'text/html, application/ld+json' },
     })
 
     if (res.status !== 200) {
@@ -509,17 +669,14 @@ async function fetchJSONLD(url) {
   if (doc) {
     const els = doc.querySelectorAll("script[type='application/ld+json']")
     for (let i = 0, len = els.length; i < len; ++i) {
-      const el = els[i]
+      const el = els[i] as HTMLScriptElement
       let json
       try {
         json = JSON.parse(el.innerText)
       } catch (err) {
         console.warn('Invalid JSON-LD has been ignored, error was: ' + err)
       }
-      if (
-        json['@context'] === 'http://schema.org' &&
-        json['@type'] === 'Product'
-      ) {
+      if (json['@context'] === 'http://schema.org' && json['@type'] === 'Product') {
         return json
       } else {
         console.warn(`JSON-LD with invalid @context/@type has been ignored: \
@@ -533,20 +690,17 @@ async function fetchJSONLD(url) {
 
 async function fetchSettings() {
   const res = await fetch('/.well-known/shopless/settings.json', {
-    headers: { Accept: 'application/json' }
+    headers: { Accept: 'application/json' },
   })
 
   if (res.status !== 200) {
-    throw new Error(
-      'Failed to retrieve shopless settings with status: ' + res.status
-    )
+    throw new Error('Failed to retrieve shopless settings with status: ' + res.status)
   }
 
   const contentType = res.headers.get('content-type')
   if (!contentType || !contentType.includes('application/json')) {
     throw new Error(
-      'Failed to retreive shopless settings, expected JSON, received content-type: ',
-      contentType
+      'Failed to retrieve shopless settings, expected JSON, received content-type: ' + contentType
     )
   }
 
