@@ -92,7 +92,8 @@ export class Cart {
     if (json) {
       const data: CartValue = JSON.parse(json)
       if (data.currency !== this.currency) {
-        return
+        // @ts-ignore setting a readonly property
+        this.currency = data.currency
       }
 
       this.settings = await fetchSettings()
