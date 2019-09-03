@@ -91,7 +91,7 @@ export class Cart {
     const json = window.localStorage.getItem(LOCAL_STORAGE_KEY)
     if (json) {
       const data: CartValue = JSON.parse(json)
-      if (data.currency !== this.currency) {
+      if (data.currency !== this.currency && data.lineItems.length > 0) {
         // @ts-ignore setting a readonly property
         this.currency = data.currency
       }
