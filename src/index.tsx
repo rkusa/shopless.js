@@ -450,6 +450,7 @@ interface AddressValue {
   readonly province?: string
   readonly country: string
   readonly countryName: string
+  readonly phone?: string
 }
 
 export class Address implements AddressValue {
@@ -461,6 +462,7 @@ export class Address implements AddressValue {
   public province?: string
   public country: string
   public countryName: string
+  public phone?: string
 
   constructor(data: AddressValue) {
     this.recipient = data.recipient
@@ -471,6 +473,7 @@ export class Address implements AddressValue {
     this.province = data.province
     this.country = data.country
     this.countryName = data.countryName
+    this.phone = data.phone
   }
 }
 
