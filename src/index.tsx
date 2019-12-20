@@ -97,9 +97,12 @@ export class Cart {
       }
 
       this.settings = await fetchSettings()
-      this.lineItems = data.lineItems.map(data => {
-        return data instanceof LineItem ? data : new LineItem(data)
-      })
+      this.lineItems = data.lineItems
+        // filter out line items from previous shopless.js version that didn't require a product sku
+        .filter(data => data.sku)
+        .map(data => {
+          return data instanceof LineItem ? data : new LineItem(data)
+        })
       this.invoiceAddress = data && data.invoiceAddress && new Address(data.invoiceAddress)
       this.shippingAddress = data && data.shippingAddress && new Address(data.shippingAddress)
       this.email = data.email
@@ -215,7 +218,8 @@ export class Cart {
         .filter(o => o)
 
     const lineItem = new LineItem({
-      url: url,
+      sku: data.sku,
+      url,
       quantity: new Decimal(qty),
       price: offer.price,
       taxrates: taxrates,
@@ -273,6 +277,7 @@ export class Cart {
             url = window.location.origin + url
           }
           return {
+            sku: item.sku,
             url: url,
             name: item.name,
             quantity: item.quantity,
@@ -484,6 +489,7 @@ interface Option {
 }
 
 interface LineItemValue {
+  sku: string
   url: string
   quantity: string | Decimal
   price: string | Decimal | number
@@ -494,6 +500,7 @@ interface LineItemValue {
 }
 
 export class LineItem {
+  public sku: string
   public url: string
   public quantity: Decimal
   public price: Decimal
@@ -503,6 +510,7 @@ export class LineItem {
   public options: Option[]
 
   constructor(data: LineItemValue) {
+    this.sku = data.sku
     this.url = data.url
     this.quantity = new Decimal(data.quantity)
     this.price = new Decimal(data.price)
@@ -544,6 +552,7 @@ export class LineItem {
 
   valueOf(): LineItemValue {
     return {
+      sku: this.sku.valueOf(),
       url: this.url.valueOf(),
       quantity: this.quantity.valueOf(),
       price: this.price.valueOf(),
