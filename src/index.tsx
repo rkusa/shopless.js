@@ -88,7 +88,13 @@ export class Cart {
   }
 
   async restore() {
-    const json = window.localStorage.getItem(LOCAL_STORAGE_KEY)
+    let json
+    if (typeof window.localStorage !== 'undefined') {
+      json = window.localStorage.getItem(LOCAL_STORAGE_KEY)
+    }
+    if (!json && typeof window.sessionStorage !== 'undefined') {
+      json = window.sessionStorage.getItem(LOCAL_STORAGE_KEY)
+    }
     if (json) {
       const data: CartValue = JSON.parse(json)
       if (data.currency !== this.currency && data.lineItems.length > 0) {
@@ -438,7 +444,12 @@ export class Cart {
 }
 
 function saveCart(cart: Cart) {
-  window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(cart.valueOf()))
+  if (typeof window.localStorage !== 'undefined') {
+    window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(cart.valueOf()))
+  }
+  if (typeof window.sessionStorage !== 'undefined') {
+    window.sessionStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(cart.valueOf()))
+  }
 }
 
 interface AddressValue {
