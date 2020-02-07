@@ -162,6 +162,7 @@ export class Cart {
       }
     }
 
+    const usedUniqueAdjustments = new Set()
     const lineOptions =
       options &&
       Object.entries(options)
@@ -207,10 +208,33 @@ export class Cart {
               c.kind === 'adjustment' &&
               c.currency === offer!.priceCurrency &&
               c.option in options &&
-              options[c.option] !== false &&
               value !== false
             ) {
+              if (c.unique && usedUniqueAdjustments.has(c.unique)) {
+                continue
+              }
+
+              const dep = options[c.option]
+              if (c.value && typeof dep === 'number') {
+                if ('eq' in c.value && !(dep === c.value.eq)) {
+                  continue
+                } else if ('gt' in c.value && !(dep > c.value.gt)) {
+                  continue
+                } else if ('ge' in c.value && !(dep >= c.value.ge)) {
+                  continue
+                } else if ('lt' in c.value && !(dep < c.value.lt)) {
+                  continue
+                } else if ('le' in c.value && !(dep <= c.value.le)) {
+                  continue
+                }
+              } else if (dep === false) {
+                continue
+              }
+
               price += c.price
+              if (c.unique) {
+                usedUniqueAdjustments.add(c.unique)
+              }
             }
           }
 
@@ -658,6 +682,8 @@ export interface AdjustmentConstraint {
   '@type': 'Constraint'
   kind: 'adjustment'
   option: string
+  value?: { eq: number } | { gt: number } | { ge: number } | { lt: number } | { le: number }
+  unique?: string
   price: number
   currency: string
 }
