@@ -188,7 +188,8 @@ export class Cart {
                     value === c.value ||
                     ((c.min === undefined || value >= c.min) &&
                       (c.max === undefined || value <= c.max) &&
-                      (c.step === undefined || (value as number) % c.step === 0)))
+                      (c.step === undefined ||
+                        new Decimal(value as number).modulo(c.step).isZero())))
                 )
               case 'boolean':
                 return offer!.priceCurrency === c.currency && (!c.value || value === c.value)
