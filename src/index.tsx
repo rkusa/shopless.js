@@ -288,42 +288,52 @@ export class Cart {
     this.updateShipping()
   }
 
-  async order<Meta>(opts: OrderOpts<Meta>) {
+  orderPayload() {
     if (!this.shippingAddress) {
       throw new Error('Must set a shipping address before creating an order')
     }
 
     const shippingMethod = this.shippingMethod(this.shippingAddress.country)
+    return {
+      currency: this.currency,
+      lineItems: this.lineItems.map(item => {
+        let url = item.url
+        if (url.substr(0, 4) !== 'http') {
+          url = window.location.origin + url
+        }
+        return {
+          sku: item.sku,
+          url: url,
+          name: item.name,
+          quantity: item.quantity,
+          price: item.price,
+          total: item.total,
+          options: item.options,
+        }
+      }),
+      email: this.email,
+      shippingAddress: this.shippingAddress,
+      invoiceAddress: this.invoiceAddress,
+      shippingMethod: shippingMethod ? shippingMethod.name : null,
+      shipping: this.shipping,
+      tax: this.tax,
+      total: this.total,
+    }
+  }
+
+  async order<Meta>(opts: OrderOpts<Meta>) {
+    if (!this.shippingAddress) {
+      throw new Error('Must set a shipping address before creating an order')
+    }
+
     const res = await fetch(this.endpoint + 'orders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        ...this.orderPayload(),
         paymentMethod: opts.payment.method,
         paymentId: opts.payment.id,
         paymentMeta: opts.payment.meta,
-        currency: this.currency,
-        lineItems: this.lineItems.map(item => {
-          let url = item.url
-          if (url.substr(0, 4) !== 'http') {
-            url = window.location.origin + url
-          }
-          return {
-            sku: item.sku,
-            url: url,
-            name: item.name,
-            quantity: item.quantity,
-            price: item.price,
-            total: item.total,
-            options: item.options,
-          }
-        }),
-        email: this.email,
-        shippingAddress: this.shippingAddress,
-        invoiceAddress: this.invoiceAddress,
-        shippingMethod: shippingMethod ? shippingMethod.name : null,
-        shipping: this.shipping,
-        tax: this.tax,
-        total: this.total,
       }),
     })
     if (res.status !== 201) {
