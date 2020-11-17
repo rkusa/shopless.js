@@ -7,18 +7,20 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "pretty-quick": "pretty-quick",
-    "type-check": "tsc"
+    "type-check": "tsc",
+    "fmt": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\""
   },
   "author": "Markus Ast <m@rkusa.st>",
   "license": "MIT",
   "dependencies": {
-    "decimal.js-light": "^2.4.1"
+    "decimal.js-light": "^2.4.1",
+    "regenerator-runtime": "^0.13.5"
   },
   "devDependencies": {
-    "husky": "^3.1.0",
-    "prettier": "^1.19.1",
+    "husky": "^4.2.5",
+    "prettier": "^2.0.4",
     "pretty-quick": "^2.0.1",
-    "typescript": "^3.7.3"
+    "typescript": "^3.8.3"
   },
   "prettier": {
     "printWidth": 100,

@@ -4,6 +4,7 @@ const LOCAL_STORAGE_KEY = 'shoplessCart'
 const ZERO = new Decimal(0)
 
 interface CartOpts {
+  locale: string
   endpoint: string
   currency?: string
   stackLineItems?: boolean
@@ -17,23 +18,19 @@ interface CartValue {
   email: string | null
 }
 
-export interface Taxrate {
+export type Settings = Record<string, CountrySettings>
+
+export interface CountrySettings {
+  enabled: boolean
+  name: Record<string, string>
   taxrate: number
-  countries: string[]
-  productType?: string
+  shippingMethods: Record<string, ShippingMethod>
+  provinces?: Record<string, string>[]
 }
 
 export interface ShippingMethod {
-  price: number
-  currency: string
-  name: string
-  countries: string[]
-}
-
-export interface Settings {
-  allowedCountries: { [k: string]: string }
-  taxrates: Taxrate[]
-  shipping: ShippingMethod[]
+  name: Record<string, string>
+  price: Record<string, number>
 }
 
 export interface Payment<Meta> {
@@ -57,8 +54,10 @@ export class Cart {
   invoiceAddress?: Address | null
   shippingAddress?: Address | null
   shippingRules?: ShippingMethod[]
+  shippingMethod?: string
+  locale: string
 
-  constructor(opts: CartOpts) {
+  constructor(opts: CartOpts, settings?: Settings) {
     if (!opts || !opts.endpoint) {
       throw new TypeError('Endpoint must be defined')
     }
@@ -69,8 +68,9 @@ export class Cart {
     }
     this.currency = opts.currency || 'EUR'
     this.stackLineItems = opts.stackLineItems === false ? false : true
+    this.locale = opts.locale
     this.cache = new Map()
-    this.settings = null
+    this.settings = settings || null
 
     this.lineItems = []
   }
@@ -102,7 +102,9 @@ export class Cart {
         this.currency = data.currency
       }
 
-      this.settings = await fetchSettings()
+      if (!this.settings) {
+        this.settings = await fetchSettings()
+      }
       this.lineItems = data.lineItems
         // filter out line items from previous shopless.js version that didn't require a product sku
         .filter(data => data.sku)
@@ -112,7 +114,6 @@ export class Cart {
       this.invoiceAddress = data && data.invoiceAddress && new Address(data.invoiceAddress)
       this.shippingAddress = data && data.shippingAddress && new Address(data.shippingAddress)
       this.email = data.email
-      this.updateShipping()
     } else {
       return
     }
@@ -145,22 +146,23 @@ export class Cart {
       throw new Error('Product data does not contain an offer (price), product data is: ' + data)
     }
 
-    let taxrates = []
-    if (data.additionalType) {
-      for (const setting of this.settings!.taxrates) {
-        if (data.additionalType === setting.productType) {
-          taxrates.push(setting)
-        }
-      }
-    }
+    // TODO: re-enable additionTypes
+    // let taxrates = []
+    // if (data.additionalType) {
+    //   for (const setting of this.settings!.taxrates) {
+    //     if (data.additionalType === setting.productType) {
+    //       taxrates.push(setting)
+    //     }
+    //   }
+    // }
 
-    if (taxrates.length === 0) {
-      for (const setting of this.settings!.taxrates) {
-        if (!setting.productType) {
-          taxrates.push(setting)
-        }
-      }
-    }
+    // if (taxrates.length === 0) {
+    //   for (const setting of this.settings!.taxrates) {
+    //     if (!setting.productType) {
+    //       taxrates.push(setting)
+    //     }
+    //   }
+    // }
 
     const usedUniqueAdjustments = new Set()
     const lineOptions =
@@ -253,7 +255,6 @@ export class Cart {
       url,
       quantity: new Decimal(qty),
       price: offer.price,
-      taxrates: taxrates,
       name: data.name,
       meta: meta,
       options: lineOptions,
@@ -276,7 +277,6 @@ export class Cart {
     }
 
     saveCart(this)
-    this.updateShipping()
   }
 
   remove(lineItem: LineItem) {
@@ -285,7 +285,6 @@ export class Cart {
       this.lineItems.splice(ix, 1)
       saveCart(this)
     }
-    this.updateShipping()
   }
 
   orderPayload() {
@@ -293,7 +292,10 @@ export class Cart {
       throw new Error('Must set a shipping address before creating an order')
     }
 
-    const shippingMethod = this.shippingMethod(this.shippingAddress.country)
+    if (!this.shippingMethod) {
+      throw new Error('Must select shipping method')
+    }
+
     return {
       currency: this.currency,
       lineItems: this.lineItems.map(item => {
@@ -314,7 +316,7 @@ export class Cart {
       email: this.email,
       shippingAddress: this.shippingAddress,
       invoiceAddress: this.invoiceAddress,
-      shippingMethod: shippingMethod ? shippingMethod.name : null,
+      shippingMethod: this.shippingMethod,
       shipping: this.shipping,
       tax: this.tax,
       total: this.total,
@@ -344,24 +346,14 @@ export class Cart {
   reset() {
     this.lineItems = []
     this.invoiceAddress = this.shippingAddress = this.email = null
+    this.shippingMethod = undefined
     saveCart(this)
-  }
-
-  updateShipping() {
-    if (!this.settings) {
-      return
-    }
-
-    this.shippingRules = this.settings.shipping.filter(rule => {
-      // TODO: other rules
-      return rule.currency === this.currency
-    })
   }
 
   setInvoiceAddress(data: AddressValue) {
     this.invoiceAddress = data ? new Address(data) : null
     if (this.invoiceAddress) {
-      this.invoiceAddress.countryName = this.countries()[this.invoiceAddress.country]
+      this.invoiceAddress.countryName = this.countryName(this.invoiceAddress.country)
     }
     saveCart(this)
   }
@@ -369,8 +361,9 @@ export class Cart {
   setShippingAddress(data: AddressValue) {
     this.shippingAddress = data ? new Address(data) : null
     if (this.shippingAddress) {
-      this.shippingAddress.countryName = this.countries()[this.shippingAddress.country]
+      this.shippingAddress.countryName = this.countryName(this.shippingAddress.country)
     }
+    this.shippingMethod = undefined
     saveCart(this)
   }
 
@@ -380,41 +373,79 @@ export class Cart {
   }
 
   async countryProvinces(country: string) {
-    const res = await fetch(`/.well-known/shopless/provinces/${country.toLowerCase()}.json`)
-    if (res.status !== 200) {
-      return []
+    if (this.settings) {
+      const provinces = (this.settings[country].provinces || []).map(p => p[this.locale])
+      provinces.sort((lhs, rhs) => lhs.localeCompare(rhs))
+      return provinces
     } else {
-      return await res.json()
+      return []
+    }
+  }
+
+  countryName(code: string) {
+    if (!this.settings) {
+      return code
+    } else {
+      return this.settings[code].name[this.locale]
     }
   }
 
   countries() {
-    if (!this.settings) {
-      return {}
+    if (this.settings && this.settings) {
+      const countries = Object.entries(this.settings)
+        .filter(([, settings]) => settings.enabled && this.locale in settings.name)
+        .map(([code, settings]) => ({
+          code,
+          name: settings.name[this.locale] || code,
+        }))
+
+      countries.sort((lhs, rhs) => lhs.name.localeCompare(rhs.name))
+
+      return countries
     } else {
-      return this.settings.allowedCountries
+      return []
     }
   }
 
-  shippingMethod(country: string) {
+  shippingMethods(country: string) {
     if (!this.settings) {
       throw new Error('Settings not loaded')
     }
 
-    return this.settings.shipping.filter(rule => {
-      // TODO: other rules
-      return rule.currency === this.currency && rule.countries.indexOf(country) > -1
-    })[0]
+    const countrySettings = this.settings[country]
+    if (!countrySettings) {
+      return {}
+    }
+
+    const methods = Object.entries(countrySettings.shippingMethods).map(([key, method]) => ({
+      key,
+      name: method.name[this.locale],
+      price: method.price[this.currency],
+    }))
+
+    console.log(methods)
+
+    return methods
   }
 
-  get shipping() {
-    if (!this.shippingAddress || !this.shippingRules) {
+  selectShippingMethod(method: string) {
+    if (!this.shippingAddress) {
+      new Error('No shipping address selected')
+    }
+
+    if (method in this.shippingMethods(this.shippingAddress!.country)) {
+      this.shippingMethod = method
+    }
+  }
+
+  shipping(method: string) {
+    if (!this.shippingAddress) {
       return new Decimal(0)
     }
 
-    const rule = this.shippingMethod(this.shippingAddress.country)
+    const rule = this.shippingMethods(this.shippingAddress.country)[method]
     if (rule) {
-      return new Decimal(rule.price)
+      return new Decimal(rule.price[this.currency])
     } else {
       return new Decimal(0)
     }
@@ -430,6 +461,13 @@ export class Cart {
       return ZERO
     }
 
+    const countrySettings = this.settings![this.shippingAddress.country]
+    if (!countrySettings) {
+      return ZERO
+    }
+
+    const taxrate = new Decimal(countrySettings.taxrate)
+
     let parts = new Map()
     let tax: Decimal = this.lineItems
       .map(lineItem => {
@@ -437,15 +475,14 @@ export class Cart {
           return new Decimal(0)
         }
 
-        const taxrate = lineItem.countryTax(this.shippingAddress.country)
-        let part = parts.get(taxrate.rate) || new Decimal(0)
+        let part = parts.get(taxrate) || new Decimal(0)
         part = part.add(lineItem.total)
-        parts.set(taxrate.rate, part)
-        return taxrate.tax
+        parts.set(taxrate, part)
+        return calcTax(lineItem.total, taxrate)
       })
       .reduce((lhs, rhs) => lhs.add(rhs), new Decimal(0))
 
-    const shipping = this.shipping
+    const shipping = this.shipping(this.shippingAddress.country)
     if (shipping.gt(0)) {
       for (var [rate, part] of parts) {
         tax = tax.add(calcTax(part.div(subtotal).mul(shipping), rate))
@@ -463,7 +500,11 @@ export class Cart {
   }
 
   get total() {
-    return this.subtotal.add(this.shipping)
+    if (this.shippingMethod) {
+      return this.subtotal.add(this.shipping(this.shippingMethod))
+    } else {
+      return this.subtotal
+    }
   }
 
   private async fetchProductData(url: string) {
@@ -542,7 +583,6 @@ interface LineItemValue {
   url: string
   quantity: string | Decimal
   price: string | Decimal | number
-  taxrates: Taxrate[]
   name: string
   meta: any
   options: OptionValue[]
@@ -553,7 +593,6 @@ export class LineItem {
   public url: string
   public quantity: Decimal
   public price: Decimal
-  public taxrates: Taxrate[]
   public name: string
   public meta: any
   public options: Option[]
@@ -566,31 +605,12 @@ export class LineItem {
     if (!this.price.gt(0)) {
       throw new TypeError('Price cannot be negative (use a negative quantity instead)')
     }
-    this.taxrates = data.taxrates
     this.name = data.name
     this.meta = data.meta
     this.options = data.options.map(o => ({
       ...o,
       price: new Decimal(o.price),
     }))
-  }
-
-  countryTax(isoCode: string) {
-    for (const entry of this.taxrates) {
-      if (entry.countries.indexOf(isoCode) !== -1) {
-        let taxrate = new Decimal(entry.taxrate)
-        if (taxrate.gt(0)) {
-          return {
-            tax: calcTax(this.total, taxrate),
-            rate: taxrate,
-          }
-        }
-
-        break
-      }
-    }
-
-    return { tax: new Decimal(0), rate: new Decimal(0) }
   }
 
   get total() {
@@ -605,7 +625,6 @@ export class LineItem {
       url: this.url.valueOf(),
       quantity: this.quantity.valueOf(),
       price: this.price.valueOf(),
-      taxrates: this.taxrates.valueOf() as Taxrate[],
       name: this.name.valueOf(),
       meta: this.meta.valueOf(),
       options: this.options.valueOf() as OptionValue[],
